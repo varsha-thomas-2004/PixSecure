@@ -1,0 +1,10 @@
+{
+  "name": "PixSecure",
+  "description": "An extension to block suspicious downloads",
+  "version": "1.0",
+  "manifest_version": 3,
+  "permissions": ["downloads"],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
