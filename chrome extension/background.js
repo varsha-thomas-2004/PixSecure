@@ -1,90 +1,79 @@
 const Decision = {
     BLOCK: "block",
     WARN: "warn",
-    ALLOW_ONCE: "allow_once"
+    ALLOW: "allow"
+};
+
+function getExtension(filename) {
+    if (!filename) return "";
+    const parts = filename.toLowerCase().split(".");
+    return parts.length > 1 ? parts.pop() : "";
 }
 
-function getExtension(filename) 
-{
-    if (!filename) 
-        return "";
-    const parts = filename.toLowerCase().split("."); //["file", "pdf"]
-    return parts.length > 1 ? parts.pop() : ""; //return "pdf"
-}
+function decideDownload(filename, size) {
 
-function decideDownload(item)
-{
-    const filename = item.url;
     const ext = getExtension(filename);
-    const size = item.totalBytes || 0;
 
     const executableExts = ["exe", "scr", "bat", "cmd", "js", "vbs", "hta", "lnk"];
     const archiveExts = ["zip", "rar", "7z", "iso"];
 
-    if (executableExts.includes(ext))
-    {
-        return {
-            decision: Decision.BLOCK, 
-            reason: "Executable file type."
-        };
+    if (executableExts.includes(ext)) {
+        return { decision: Decision.BLOCK, reason: "Executable file type." };
     }
 
-    if (filename.match(/\.(pdf|jpg|jpeg|docx|png)\.(${executableExts.join("|")})$/i))
-    {
-        return {
-            decision: Decision.BLOCK,
-            reason: "Multiple extension deception."
-        };
-    }
-
-    if (archiveExts.includes(ext))
-    {
-        return {
-            decision: Decision.WARN,
-            reason: "Archives may contain hidden executables."
-        };
-    }
-
-    if (size > 100 * 1024 * 1024)
-    {
-        return {
-            decision: Decision.WARN,
-            reason: "Large file size."
-        };
-    }
-
-    return {
-        decision: Decision.ALLOW_ONCE,
-        reason: "Nothing suspicious found."
-    };
-}
-
-function isUserInitiated(item)
-{
-    return (
-        (item.filename || item.url.startsWith("blob") || item.url.startsWith("http")) &&
-        item.totalBytes !== undefined        
+    const multiExtRegex = new RegExp(
+        `\\.(pdf|jpg|jpeg|docx|png)\\.(${executableExts.join("|")})$`,
+        "i"
     );
-}
 
-function detectDownload(downloadItem) 
-{
-    console.log("Download detected!");
-    console.log("File: ", downloadItem.filename);
-    console.log("URL: ", downloadItem.url);
-    console.log("Total Bytes:", downloadItem.totalBytes);
-
-    if (!isUserInitiated(downloadItem))
-    {
-        console.log("Ignored non-user initiated download.", downloadItem.id);
+    if (multiExtRegex.test(filename)) {
+        return { decision: Decision.BLOCK, reason: "Multiple extension deception." };
     }
 
-    chrome.downloads.cancel(downloadItem.id);
-    console.log("Download intercepted.");
+    if (archiveExts.includes(ext)) {
+        return { decision: Decision.WARN, reason: "Archive file." };
+    }
 
-    const result = decideDownload(downloadItem);
-    console.log("Decision: ", result.decision);
-    console.log("Reason: ", result.reason);
+    if (size > 100 * 1024 * 1024) {
+        return { decision: Decision.WARN, reason: "Large file." };
+    }
+
+    return { decision: Decision.ALLOW, reason: "Nothing suspicious." };
 }
 
-chrome.downloads.onCreated.addListener(detectDownload);
+// Use the onDeterminingFilename event to check downloads before they start, helps in obtaining the name and size before the download begins, allowing us to block or warn as needed.
+chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
+
+    const filename = downloadItem.suggestedFilename || downloadItem.filename || "";
+    const size = downloadItem.totalBytes || 0;
+
+    console.log("Final filename:", filename);
+
+    const result = decideDownload(filename, size);
+
+    console.log("Decision:", result.decision);
+    console.log("Reason:", result.reason);
+
+    if (result.decision === Decision.BLOCK || result.decision === Decision.WARN) {
+
+    chrome.downloads.search({ id: downloadItem.id }, (results) => {
+
+        if (!results || results.length === 0) return;
+
+        const state = results[0].state;
+
+        if (state === "in_progress") {
+            chrome.downloads.cancel(downloadItem.id);
+            console.log("Download cancelled.");
+        } else {
+            console.log("Too late. Download state:", state);
+        }
+
+    });
+
+    return;
+}
+
+    // Allow
+    suggest({ filename: filename });
+});
