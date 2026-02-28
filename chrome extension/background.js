@@ -52,16 +52,34 @@ async function deepInspect(buffer) {
         hasJS: /javascript:/i.test(text),
         hasEvent: /onerror|onload/i.test(text),
         hasPercentEncoding: /%3C|%3E/i.test(text),
-        hasBase64: /[A-Za-z0-9+/=]{40,}/.test(text)
+        hasBase64: /[A-Za-z0-9+/=]{20,}={0,2}/.test(text)
     };
 
     let score = 0;
 
     if (features.hasScript) score += 5;
-    if (features.hasJS) score += 4;
-    if (features.hasEvent) score += 4;
-    if (features.hasPercentEncoding) score += 3;
-    if (features.hasBase64) score += 3;
+    if (features.hasJS) score += 6;
+    if (features.hasEvent) score += 6;
+    if (features.hasPercentEncoding) score += 5;
+    if (features.hasBase64) score += 4;
+    
+    const base64Match = text.match(/[A-Za-z0-9+/]{20,}={0,2}/);
+
+    if (base64Match) {
+        console.log("Base64 candidate found:", base64Match[0]);
+
+        try {
+            const decoded = atob(base64Match[0]);
+            console.log("Decoded base64:", decoded);
+
+            if (decoded.toLowerCase().includes("<script>")) {
+                console.log("Decoded script detected!");
+                score += 6;
+            }
+        } catch (e) {
+            console.log("Base64 decode failed");
+        }
+    }
 
     console.log("Deep Inspect Score:", score);
 
@@ -137,7 +155,7 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
 
         console.log({
             filename: downloadItem.url,
-            score: score,
+            //score: score,
             decision: deepResult
         });
 
