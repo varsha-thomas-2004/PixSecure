@@ -1,3 +1,4 @@
+importScripts("exifr.js");
 const Decision = {
     BLOCK: "block",
     WARN: "warn",
@@ -42,51 +43,53 @@ function decideDownload(filename, size) {
 }
 
 async function deepInspect(buffer) {
-    
+
     console.log("Deep inspect started");
-    const decoder = new TextDecoder("utf-8");
-    const text = decoder.decode(buffer);
 
-    const features = {
-        hasScript: /<script/i.test(text),
-        hasJS: /javascript:/i.test(text),
-        hasEvent: /onerror|onload/i.test(text),
-        hasPercentEncoding: /%3C|%3E/i.test(text),
-        hasBase64: /[A-Za-z0-9+/=]{20,}={0,2}/.test(text)
-    };
+    try {
+        const metadata = await exifr.parse(buffer);
 
-    let score = 0;
-
-    if (features.hasScript) score += 5;
-    if (features.hasJS) score += 6;
-    if (features.hasEvent) score += 6;
-    if (features.hasPercentEncoding) score += 5;
-    if (features.hasBase64) score += 4;
-    
-    const base64Match = text.match(/[A-Za-z0-9+/]{20,}={0,2}/);
-
-    if (base64Match) {
-        console.log("Base64 candidate found:", base64Match[0]);
-
-        try {
-            const decoded = atob(base64Match[0]);
-            console.log("Decoded base64:", decoded);
-
-            if (decoded.toLowerCase().includes("<script>")) {
-                console.log("Decoded script detected!");
-                score += 6;
-            }
-        } catch (e) {
-            console.log("Base64 decode failed");
+        if (!metadata) {
+            console.log("No metadata found");
+            return Decision.ALLOW;
         }
+
+        const combined = Object.values(metadata)
+            .filter(v => typeof v === "string")
+            .join(" ");
+
+        console.log("Combined metadata string:", combined);
+
+        let score = 0;
+
+        if (/<script/i.test(combined)) score += 6;
+        if (/javascript:/i.test(combined)) score += 6;
+        if (/onerror|onload/i.test(combined)) score += 6;
+        if (/%3C|%3E/i.test(combined)) score += 5;
+
+        // Base64 detection inside metadata only
+        const base64Match = combined.match(/[A-Za-z0-9+/]{20,}={0,2}/);
+
+        if (base64Match) {
+            try {
+                const decoded = atob(base64Match[0]);
+                if (/<script/i.test(decoded)) {
+                    score += 6;
+                }
+            } catch {}
+        }
+
+        console.log("Deep Inspect Score:", score);
+
+        if (score >= 6) return Decision.BLOCK;
+        if (score >= 3) return Decision.WARN;
+
+        return Decision.ALLOW;
+
+    } catch (e) {
+        console.log("Metadata extraction failed:", e);
+        return Decision.ALLOW;
     }
-
-    console.log("Deep Inspect Score:", score);
-
-    if (score >= 8) return Decision.BLOCK;
-    if (score >= 4) return Decision.WARN;
-
-    return Decision.ALLOW;
 }
 
 // Use the onDeterminingFilename event to check downloads before they start, helps in obtaining the name and size before the download begins, allowing us to block or warn as needed.
