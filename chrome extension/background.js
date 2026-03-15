@@ -1,37 +1,41 @@
 importScripts("exifr.js");
+
 const Decision = {
     BLOCK: "block",
     WARN: "warn",
     ALLOW: "allow"
 };
 
-function getExtension(filename) {
-    if (!filename) return "";
-    const parts = filename.toLowerCase().split(".");
+const IMAGE_EXTS = ["jpg", "jpeg", "png"];
+const EXECUTABLE_EXTS = ["exe", "scr", "bat", "cmd", "js", "vbs", "hta", "lnk"];
+const ARCHIVE_EXTS = ["zip", "rar", "7z", "iso"];
+
+function getExtension(name) {
+    if (!name) return "";
+    const parts = name.toLowerCase().split(".");
     return parts.length > 1 ? parts.pop() : "";
 }
 
-function decideDownload(filename, size) {
+//LAYER 1 – STRUCTURAL FILTER
+function decideDownload(name, size) {
 
-    const ext = getExtension(filename);
+    const ext = getExtension(name);
+    console.log("Getting extension: ", ext);
 
-    const executableExts = ["exe", "scr", "bat", "cmd", "js", "vbs", "hta", "lnk"];
-    const archiveExts = ["zip", "rar", "7z", "iso"];
-
-    if (executableExts.includes(ext)) {
+    if (EXECUTABLE_EXTS.includes(ext)) {
         return { decision: Decision.BLOCK, reason: "Executable file type." };
     }
 
     const multiExtRegex = new RegExp(
-        `\\.(pdf|jpg|jpeg|docx|png)\\.(${executableExts.join("|")})$`,
+        `\\.(pdf|jpg|jpeg|docx|png)\\.(${EXECUTABLE_EXTS.join("|")})$`,
         "i"
     );
 
-    if (multiExtRegex.test(filename)) {
+    if (multiExtRegex.test(name)) {
         return { decision: Decision.BLOCK, reason: "Multiple extension deception." };
     }
 
-    if (archiveExts.includes(ext)) {
+    if (ARCHIVE_EXTS.includes(ext)) {
         return { decision: Decision.WARN, reason: "Archive file." };
     }
 
@@ -42,135 +46,153 @@ function decideDownload(filename, size) {
     return { decision: Decision.ALLOW, reason: "Nothing suspicious." };
 }
 
-async function deepInspect(buffer) {
+//LAYER 2 – IMAGE METADATA INSPECTION
+async function extractMetadataString(buffer) {
 
-    console.log("Deep inspect started");
+    const metadata = await exifr.parse(buffer);
+
+    if (!metadata) return "";
+
+    return Object.values(metadata)
+        .filter(v => typeof v === "string")
+        .join(" ");
+}
+
+function extractFeatures(metadataString) {
+
+    const features = {
+        hasScriptTag: /<script/i.test(metadataString),
+        hasJavascriptScheme: /javascript:/i.test(metadataString),
+        hasEventHandler: /onerror|onload/i.test(metadataString),
+        hasUrlEncodedPayload: false,
+        hasBase64Payload: false
+    };
+
+    // URL decode detection
+    try {
+        const decodedURL = decodeURIComponent(metadataString);
+        if (/<script/i.test(decodedURL)) {
+            features.hasUrlEncodedPayload = true;
+        }
+    } catch {}
+
+    // Base64 detection
+    const base64Match = metadataString.match(/[A-Za-z0-9+/]{20,}={0,2}/);
+
+    if (base64Match) {
+        try {
+            const decoded = atob(base64Match[0]);
+            if (/<script/i.test(decoded)) {
+                features.hasBase64Payload = true;
+            }
+        } catch {}
+    }
+
+    return features;
+}
+
+function scoreFeatures(features) {
+
+    let score = 0;
+
+    if (features.hasScriptTag) score += 6;
+    if (features.hasJavascriptScheme) score += 6;
+    if (features.hasEventHandler) score += 6;
+    if (features.hasUrlEncodedPayload) score += 6;
+    if (features.hasBase64Payload) score += 6;
+
+    console.log("Feature scores: ", features, "Total score: ", score);
+    return score;
+}
+
+function decideFromScore(score) {
+
+    if (score >= 6)
+    {
+        console.log("Blocking due to high score: ", score);
+        return Decision.BLOCK;
+    }
+    if (score >= 3)
+    {
+        console.log("Warning due to moderate score: ", score);
+        return Decision.WARN;
+    }
+    console.log("Allowing due to low score: ", score);
+    return Decision.ALLOW;
+}
+
+async function deepInspectImage(buffer) {
 
     try {
-        const metadata = await exifr.parse(buffer);
 
-        if (!metadata) {
-            console.log("No metadata found");
-            return Decision.ALLOW;
-        }
+        const metadataString = await extractMetadataString(buffer);
 
-        const combined = Object.values(metadata)
-            .filter(v => typeof v === "string")
-            .join(" ");
+        if (!metadataString) return Decision.ALLOW;
 
-        console.log("Combined metadata string:", combined);
+        const features = extractFeatures(metadataString);
+        const score = scoreFeatures(features);
 
-        let score = 0;
+        return decideFromScore(score);
 
-        if (/<script/i.test(combined)) score += 6;
-        if (/javascript:/i.test(combined)) score += 6;
-        if (/onerror|onload/i.test(combined)) score += 6;
-        if (/%3C|%3E/i.test(combined)) score += 5;
-
-        // Base64 detection inside metadata only
-        const base64Match = combined.match(/[A-Za-z0-9+/]{20,}={0,2}/);
-
-        if (base64Match) {
-            try {
-                const decoded = atob(base64Match[0]);
-                if (/<script/i.test(decoded)) {
-                    score += 6;
-                }
-            } catch {}
-        }
-
-        console.log("Deep Inspect Score:", score);
-
-        if (score >= 6) return Decision.BLOCK;
-        if (score >= 3) return Decision.WARN;
-
-        return Decision.ALLOW;
-
-    } catch (e) {
-        console.log("Metadata extraction failed:", e);
+    } catch {
         return Decision.ALLOW;
     }
 }
 
-// Use the onDeterminingFilename event to check downloads before they start, helps in obtaining the name and size before the download begins, allowing us to block or warn as needed.
-// chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
-
-//     const filename = downloadItem.suggestedFilename || downloadItem.filename || "";
-//     const size = downloadItem.totalBytes || 0;
-
-//     console.log("Final filename:", filename);
-
-//     const result = decideDownload(filename, size);
-
-//     console.log("Decision:", result.decision);
-//     console.log("Reason:", result.reason);
-
-//     if (result.decision === Decision.BLOCK || result.decision === Decision.WARN) {
-
-//     chrome.downloads.search({ id: downloadItem.id }, (results) => {
-
-//         if (!results || results.length === 0) return;
-
-//         const state = results[0].state;
-
-//         if (state === "in_progress") {
-//             chrome.downloads.cancel(downloadItem.id);
-//             console.log("Download cancelled.");
-//         } else {
-//             console.log("Too late. Download state:", state);
-//         }
-
-//     });
-
-//     return;
-// }
-
-//     // Allow
-//     suggest({ filename: filename });
-// });
-
+//DOWNLOAD CASCADE
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
 
-    console.log("onCreated triggered for:", downloadItem.url);
-
     const url = downloadItem.url || "";
+    const rawName = downloadItem.filename || url || "";
+    const size = downloadItem.totalBytes || 0;
+    const ext = getExtension(rawName);
+    const layer1 = decideDownload(rawName, size);
 
-    const imageExts = ["jpg", "jpeg", "png"];
+    // Immediate block
+    if (layer1.decision === Decision.BLOCK) {
+        console.log(`Blocking download: ${rawName} - Reason: ${layer1.reason}`);
+        chrome.downloads.cancel(downloadItem.id);
+        return;
+    }
+    
+    if (IMAGE_EXTS.includes(ext)) {
+        
+        chrome.downloads.pause(downloadItem.id);
 
-    const isImage = imageExts.some(ext =>
-        url.toLowerCase().includes("." + ext)
-    );
+        try {
 
-    if (!isImage) {
-        console.log("Not an image, skipping deep inspect");
+            const response = await fetch(url, {
+                headers: { "Range": "bytes=0-1048575" }
+            });
+
+            const buffer = await response.arrayBuffer();
+            const deepResult = await deepInspectImage(buffer);
+            console.log("Deep result returned:", deepResult);
+
+            if (deepResult === Decision.BLOCK) {
+                chrome.downloads.cancel(downloadItem.id);
+                console.log(`Blocking download: ${rawName} - Reason: Suspicious image content`);
+            } else {
+                chrome.downloads.resume(downloadItem.id);
+                console.log(`Allowing download: ${rawName} - Reason: Image content is safe`);
+            }
+
+        } catch {
+            chrome.downloads.resume(downloadItem.id);
+            console.log(`Allowing download: ${rawName} - Reason: Error occurred while inspecting image`);
+        }
+        return;
+    }
+    
+    if (layer1.decision === Decision.WARN && ARCHIVE_EXTS.includes(ext)) {
+        console.log(`Warning download: ${rawName} - Reason: ${layer1.reason}`);
         return;
     }
 
-    chrome.downloads.pause(downloadItem.id);
-
-    try {
-        console.log("Fetching file for deep inspect...");
-
-        const response = await fetch(url);
-        const buffer = await response.arrayBuffer();
-
-        const deepResult = await deepInspect(buffer);
-
-        console.log({
-            filename: downloadItem.url,
-            //score: score,
-            decision: deepResult
-        });
-
-        if (deepResult === Decision.BLOCK) {
-            chrome.downloads.cancel(downloadItem.id);
-        } else {
-            chrome.downloads.resume(downloadItem.id);
-        }
-
-    } catch (err) {
-        console.error("Deep inspect error:", err);
-        console.warn("Inspection failed — allowing download");
-        chrome.downloads.resume(downloadItem.id);
+    // Immediate allow
+    if (layer1.decision === Decision.ALLOW) {
+        console.log(`Allowing download: ${rawName} - Reason: ${layer1.reason}`);
+        return;
     }
+
 });
