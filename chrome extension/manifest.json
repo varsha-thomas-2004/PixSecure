@@ -3,9 +3,12 @@
   "description": "An extension to block suspicious downloads",
   "version": "1.0",
   "manifest_version": 3,
-  "permissions": ["downloads"],
+  "permissions": ["downloads", "notifications"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
+  },
+  "icons": {
+    "48": "icons/icon48.png"
   }
 }

@@ -9,6 +9,7 @@ const Decision = {
 const IMAGE_EXTS = ["jpg", "jpeg", "png"];
 const EXECUTABLE_EXTS = ["exe", "scr", "bat", "cmd", "js", "vbs", "hta", "lnk"];
 const ARCHIVE_EXTS = ["zip", "rar", "7z", "iso"];
+const pendingDownloads = {};
 
 function getExtension(name) {
     if (!name) return "";
@@ -185,9 +186,31 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     }
     
     if (layer1.decision === Decision.WARN && ARCHIVE_EXTS.includes(ext)) {
-        console.log(`Warning download: ${rawName} - Reason: ${layer1.reason}`);
-        return;
+
+    chrome.downloads.pause(downloadItem.id);
+
+    const notificationId = `archive-warning-${downloadItem.id}`;
+    
+    console.log("Creating archive warning notification:", notificationId);
+    chrome.notifications.create(notificationId, {
+        type: "basic",
+        iconUrl: "./icons/icon48.png",  
+        title: "PixSecure Warning",
+        message: "This archive file may contain executable content. Click to proceed or ignore to cancel.",
+        requireInteraction: true
+        }, (id) => {
+    if (chrome.runtime.lastError) {
+        console.error("Notification error:", chrome.runtime.lastError);
+    } else {
+        console.log("Notification created:", id);
     }
+    });
+
+    // Store download id for later
+    pendingDownloads[notificationId] = downloadItem.id;
+
+    return;
+}
 
     // Immediate allow
     if (layer1.decision === Decision.ALLOW) {
@@ -195,4 +218,18 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
         return;
     }
 
+});
+
+chrome.notifications.onClicked.addListener((notificationId) => {
+
+    if (pendingDownloads[notificationId]) {
+
+        const downloadId = pendingDownloads[notificationId];
+
+        chrome.downloads.resume(downloadId);
+
+        delete pendingDownloads[notificationId];
+
+        chrome.notifications.clear(notificationId);
+    }
 });
