@@ -50,13 +50,38 @@ function decideDownload(name, size) {
 //LAYER 2 – IMAGE METADATA INSPECTION
 async function extractMetadataString(buffer) {
 
-    const metadata = await exifr.parse(buffer);
+    const metadata = await exifr.parse(buffer, {
+        tiff: true,
+        exif: true,
+        ifd0: true,
+        userComment: true,
+        mergeOutput: true
+    });
+
+    console.log("Raw metadata object:", metadata);
 
     if (!metadata) return "";
 
-    return Object.values(metadata)
-        .filter(v => typeof v === "string")
-        .join(" ");
+    let values = [];
+
+    for (let value of Object.values(metadata)) {
+
+        if (typeof value === "string") {
+            values.push(value);
+        }
+
+        else if (value instanceof Uint8Array) {
+            try {
+                const decoded = new TextDecoder().decode(value);
+                values.push(decoded);
+            } catch {}
+        }
+    }
+
+    const combined = values.join(" ");
+    console.log("Extracted metadata string:", combined);
+
+    return combined;
 }
 
 function extractFeatures(metadataString) {
@@ -127,6 +152,7 @@ async function deepInspectImage(buffer) {
     try {
 
         const metadataString = await extractMetadataString(buffer);
+        console.log("Extracted metadata string: ", metadataString);
 
         if (!metadataString) return Decision.ALLOW;
 
