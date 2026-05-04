@@ -1,3 +1,12 @@
 test/
 generate_malicious_exif.py
 evaluation/
+images/
+overleaf/
+test_alaska.py
+test_spatial.py
+test_server.py
+verify_shapes.py
+check_keys.py
+__pycache__/
+*.pt
